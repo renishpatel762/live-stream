@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Recorder</title>
+</head>
+<body>
+  <video id="preview" autoplay muted></video>
+  <button id="startBtn">Start</button>
+  <button id="stopBtn">Stop</button>
+
+  <script>
+    let mediaRecorder;
+    let socket;
+
+    document.getElementById("startBtn").onclick = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById("preview").srcObject = stream;
+
+      socket = new WebSocket("ws://localhost:8000");
+      socket.binaryType = "arraybuffer";
+
+      mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8,opus" });
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+          socket.send(e.data);
+        }
+      };
+
+      mediaRecorder.start(1000); // send every 1s
+    };
+
+    document.getElementById("stopBtn").onclick = () => {
+      mediaRecorder.stop();
+      socket.close();
+    };
+  </script>
+</body>
+</html>
