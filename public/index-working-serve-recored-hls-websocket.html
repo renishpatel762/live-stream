@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Video WebSocket Recorder</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .video-section {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .video-container {
+            flex: 1;
+            min-width: 300px;
+        }
+        
+        video {
+            width: 100%;
+            height: 250px;
+            border-radius: 15px;
+            background: rgba(0, 0, 0, 0.3);
+            object-fit: cover;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 120px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .start-btn {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+        
+        .stop-btn {
+            background: linear-gradient(45deg, #f44336, #da190b);
+            color: white;
+        }
+        
+        .start-btn:disabled, .stop-btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .status {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            font-size: 18px;
+            min-height: 24px;
+        }
+        
+        .status.recording {
+            background: rgba(244, 67, 54, 0.2);
+            border: 2px solid #f44336;
+            animation: pulse 2s infinite;
+        }
+        
+        .status.processing {
+            background: rgba(255, 193, 7, 0.2);
+            border: 2px solid #ffc107;
+            animation: pulse 2s infinite;
+        }
+        
+        .status.connected {
+            background: rgba(76, 175, 80, 0.2);
+            border: 2px solid #4CAF50;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        .info-panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .info-panel h3 {
+            margin-top: 0;
+            color: #ffeb3b;
+        }
+        
+        .video-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 15px;
+        }
+        
+        .video-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 15px 0;
+            transition: all 0.3s ease;
+        }
+        
+        .video-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .video-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #ffeb3b;
+        }
+        
+        .video-info {
+            font-size: 14px;
+            color: #ccc;
+        }
+        
+        .formats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .format-item {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .format-item:hover {
+            background: rgba(0, 0, 0, 0.5);
+        }
+        
+        .format-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        
+        .format-hls {
+            background: linear-gradient(45deg, #e91e63, #ad1457);
+        }
+        
+        .format-mp4 {
+            background: linear-gradient(45deg, #2196f3, #1565c0);
+        }
+        
+        .format-webm {
+            background: linear-gradient(45deg, #4caf50, #2e7d32);
+        }
+        
+        .format-mkv {
+            background: linear-gradient(45deg, #9c27b0, #6a1b9a);
+        }
+        
+        .quality-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            margin-right: 5px;
+        }
+        
+        .download-btn, .stream-btn {
+            background: linear-gradient(45deg, #2196F3, #1976D2);
+            color: white;
+            padding: 8px 16px;
+            font-size: 14px;
+            min-width: 80px;
+            margin: 5px;
+        }
+        
+        .stream-btn {
+            background: linear-gradient(45deg, #e91e63, #ad1457);
+        }
+        
+        .recording-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .info-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+        }
+        
+        .info-card h4 {
+            margin: 0 0 10px 0;
+            color: #ffeb3b;
+        }
+        
+        .info-card p {
+            margin: 0;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        
+        .ffmpeg-status {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .ffmpeg-available {
+            color: #4CAF50;
+        }
+        
+        .ffmpeg-unavailable {
+            color: #f44336;
+        }
+        
+        .streaming-player {
+            margin: 20px 0;
+        }
+        
+        .quality-selector {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        
+        .quality-btn {
+            padding: 8px 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+        }
+        
+        .quality-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .quality-btn.active {
+            background: linear-gradient(45deg, #2196f3, #1565c0);
+            border-color: #2196f3;
+        }
+        
+        .progress-bar {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            height: 20px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+        
+        @media (max-width: 768px) {
+            .video-section {
+                flex-direction: column;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            button {
+                width: 200px;
+            }
+            
+            .formats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Advanced Video WebSocket Recorder</h1>
+        
+        <div class="ffmpeg-status" id="ffmpegStatus">
+            <h4>🔧 FFmpeg Status</h4>
+            <p id="ffmpegStatusText">Checking...</p>
+        </div>
+        
+        <div class="video-section">
+            <div class="video-container">
+                <h3>📹 Live Preview</h3>
+                <video id="preview" autoplay muted playsinline></video>
+            </div>
+            <div class="video-container">
+                <h3>🎬 HLS Streaming Player</h3>
+                <video id="hlsPlayer" controls playsinline></video>
+                <div class="quality-selector" id="qualitySelector" style="display: none;"></div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="startBtn" class="start-btn">🔴 Start Recording</button>
+            <button id="stopBtn" class="stop-btn" disabled>⏹️ Stop Recording</button>
+        </div>
+        
+        <div id="status" class="status">Click "Start Recording" to begin</div>
+        
+        <div class="recording-info">
+            <div class="info-card">
+                <h4>Connection Status</h4>
+                <p id="connectionStatus">Connecting...</p>
+            </div>
+            <div class="info-card">
+                <h4>Recording Duration</h4>
+                <p id="duration">00:00</p>
+            </div>
+            <div class="info-card">
+                <h4>Processing Status</h4>
+                <p id="processingStatus">Ready</p>
+            </div>
+            <div class="info-card">
+                <h4>File Size</h4>
+                <p id="fileSize">0 MB</p>
+            </div>
+        </div>
+        
+        <div class="info-panel">
+            <h3>📁 Video Library with Adaptive Streaming</h3>
+            <div id="videoList" class="video-list">
+                <p>Loading videos...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let websocket = null;
+        let isRecording = false;
+        let recordingStartTime = 0;
+        let durationInterval = null;
+        let currentRecordingId = null;
+        let hls = null;
+        
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const status = document.getElementById('status');
+        const preview = document.getElementById('preview');
+        const hlsPlayer = document.getElementById('hlsPlayer');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const durationEl = document.getElementById('duration');
+        const fileSizeEl = document.getElementById('fileSize');
+        const processingStatus = document.getElementById('processingStatus');
+        const videoList = document.getElementById('videoList');
+        const ffmpegStatus = document.getElementById('ffmpegStatus');
+        const ffmpegStatusText = document.getElementById('ffmpegStatusText');
+        const qualitySelector = document.getElementById('qualitySelector');
+        
+        // Initialize WebSocket connection
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            websocket = new WebSocket(`${protocol}//${window.location.host}`);
+            
+            websocket.onopen = () => {
+                connectionStatus.textContent = 'Connected';
+                connectionStatus.style.color = '#4CAF50';
+                status.className = 'status connected';
+                status.textContent = 'Connected to server. Ready to record!';
+                startBtn.disabled = false;
+            };
+            
+            websocket.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+            
+            websocket.onclose = () => {
+                connectionStatus.textContent = 'Disconnected';
+                connectionStatus.style.color = '#f44336';
+                status.className = 'status';
+                status.textContent = 'Disconnected from server';
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+            };
+            
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                connectionStatus.textContent = 'Error';
+                connectionStatus.style.color = '#f44336';
+            };
+        }
+        
+        function handleWebSocketMessage(message) {
+            switch (message.type) {
+                case 'recording-started':
+                    currentRecordingId = message.recordingId;
+                    status.textContent = `Recording started: ${message.filename}`;
+                    processingStatus.textContent = 'Recording';
+                    break;
+                    
+                case 'processing-started':
+                    status.className = 'status processing';
+                    status.textContent = `Processing video: ${message.filename}`;
+                    processingStatus.textContent = 'Transcoding...';
+                    fileSizeEl.textContent = `${(message.fileSize / 1024 / 1024).toFixed(2)} MB`;
+                    break;
+                    
+                case 'processing-completed':
+                    status.className = 'status connected';
+                    status.textContent = `Video processed successfully: ${message.filename}`;
+                    processingStatus.textContent = 'Completed';
+                    
+                    // Show available formats
+                    console.log('Available formats:', message.availableFormats);
+                    loadVideoList();
+                    break;
+                    
+                case 'processing-error':
+                    status.className = 'status';
+                    status.textContent = `Processing error: ${message.error}`;
+                    processingStatus.textContent = 'Error';
+                    break;
+                    
+                case 'error':
+                    status.textContent = `Error: ${message.message}`;
+                    break;
+            }
+        }
+        
+        // Initialize camera
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1280, height: 720 },
+                    audio: true
+                });
+                
+                preview.srcObject = stream;
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'video/webm;codecs=vp9'
+                });
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        recordedChunks.push(event.data);
+                        sendVideoChunk(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    
+                    // Send stop recording message
+                    if (websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(JSON.stringify({
+                            type: 'stop-recording'
+                        }));
+                    }
+                    
+                    recordedChunks = [];
+                };
+                
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                status.textContent = 'Error: Cannot access camera';
+            }
+        }
+        
+        function sendVideoChunk(chunk) {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const arrayBuffer = reader.result;
+                    const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                    
+                    websocket.send(JSON.stringify({
+                        type: 'video-chunk',
+                        data: base64
+                    }));
+                };
+                reader.readAsArrayBuffer(chunk);
+            }
+        }
+        
+        function startRecording() {
+            if (mediaRecorder && websocket && websocket.readyState === WebSocket.OPEN) {
+                recordedChunks = [];
+                recordingStartTime = Date.now();
+                
+                // Send start recording message
+                websocket.send(JSON.stringify({
+                    type: 'start-recording'
+                }));
+                
+                mediaRecorder.start(1000); // Record in 1 second chunks
+                isRecording = true;
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                
+                status.className = 'status recording';
+                status.textContent = '🔴 Recording in progress...';
+                
+                // Start duration timer
+                durationInterval = setInterval(updateDuration, 1000);
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                
+                status.className = 'status processing';
+                status.textContent = 'Processing recording...';
+                
+                // Stop duration timer
+                if (durationInterval) {
+                    clearInterval(durationInterval);
+                    durationInterval = null;
+                }
+            }
+        }
+        
+        function updateDuration() {
+            if (isRecording && recordingStartTime) {
+                const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+                const minutes = Math.floor(elapsed / 60);
+                const seconds = elapsed % 60;
+                durationEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+        }
+        
+        function playHLSStream(baseFilename) {
+            const hlsUrl = `/api/hls/${baseFilename}/master.m3u8`;
+            
+            if (Hls.isSupported()) {
+                if (hls) {
+                    hls.destroy();
+                }
+                
+                hls = new Hls();
+                hls.loadSource(hlsUrl);
+                hls.attachMedia(hlsPlayer);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    hlsPlayer.play();
+                    
+                    // Show quality selector
+                    const levels = hls.levels;
+                    if (levels.length > 1) {
+                        showQualitySelector(levels);
+                    }
+                });
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS error:', data);
+                });
+                
+            } else if (hlsPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                hlsPlayer.src = hlsUrl;
+                hlsPlayer.addEventListener('loadedmetadata', function() {
+                    hlsPlayer.play();
+                });
+            }
+        }
+        
+        function showQualitySelector(levels) {
+            qualitySelector.style.display = 'flex';
+            qualitySelector.innerHTML = '';
+            
+            // Add auto quality button
+            const autoBtn = document.createElement('button');
+            autoBtn.className = 'quality-btn active';
+            autoBtn.textContent = 'Auto';
+            autoBtn.onclick = () => {
+                hls.currentLevel = -1;
+                document.querySelectorAll('.quality-btn').forEach(btn => btn.classList.remove('active'));
+                autoBtn.classList.add('active');
+            };
+            qualitySelector.appendChild(autoBtn);
+            
+            // Add quality buttons
+            levels.forEach((level, index) => {
+                const btn = document.createElement('button');
+                btn.className = 'quality-btn';
+                btn.textContent = `${level.height}p`;
+                btn.onclick = () => {
+                    hls.currentLevel = index;
+                    document.querySelectorAll('.quality-btn').forEach(btn => btn.classList.remove('active'));
+                    btn.classList.add('active');
+                };
+                qualitySelector.appendChild(btn);
+            });
+        }
+        
+        async function loadVideoList() {
+            try {
+                const response = await fetch('/api/videos');
+                const videos = await response.json();
+                
+                if (videos.length === 0) {
+                    videoList.innerHTML = '<p>No recorded videos yet.</p>';
+                    return;
+                }
+                
+                videoList.innerHTML = videos.map(video => `
+                    <div class="video-item">
+                        <div class="video-header">
+                            <div>
+                                <div class="video-title">${video.baseFilename}</div>
+                                <div class="video-info">
+                                    ${(video.size / 1024 / 1024).toFixed(2)} MB • 
+                                    ${new Date(video.created).toLocaleString()}
+                                    ${video.hasHLS ? ' • 🎬 HLS Available' : ''}
+                                </div>
+                            </div>
+                            ${video.hasHLS ? `
+                                <button class="stream-btn" onclick="playHLSStream('${video.baseFilename}')">
+                                    ▶️ Stream
+                                </button>
+                            ` : ''}
+                        </div>
+                        
+                        <div class="formats-grid">
+                            ${video.formats.map(format => `
+                                <div class="format-item">
+                                    <div class="format-badge format-${format.format}">
+                                        ${format.format.toUpperCase()}
+                                    </div>
+                                    <div class="quality-badge">${format.quality}</div>
+                                    <div>${format.streaming ? 'Adaptive Stream' : (format.size / 1024 / 1024).toFixed(2) + ' MB'}</div>
+                                    ${format.streaming ? `
+                                        <button class="stream-btn" onclick="playHLSStream('${video.baseFilename}')">
+                                            ▶️ Stream
+                                        </button>
+                                    ` : `
+                                        <button class="download-btn" onclick="downloadVideo('${format.path}', '${format.filename}')">
+                                            📥 Download
+                                        </button>
+                                    `}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading video list:', error);
+                videoList.innerHTML = '<p>Error loading videos.</p>';
+            }
+        }
+        
+        function downloadVideo(path, filename) {
+            const link = document.createElement('a');
+            link.href = path;
+            link.download = filename;
+            link.click();
+        }
+        
+        async function checkFFmpegStatus() {
+            try {
+                const response = await fetch('/api/ffmpeg/status');
+                const status = await response.json();
+                
+                if (status.available) {
+                    ffmpegStatusText.textContent = '✅ FFmpeg Available - Transcoding Enabled';
+                    ffmpegStatusText.className = 'ffmpeg-available';
+                } else {
+                    ffmpegStatusText.textContent = '❌ FFmpeg Not Available - Basic Recording Only';
+                    ffmpegStatusText.className = 'ffmpeg-unavailable';
+                }
+            } catch (error) {
+                ffmpegStatusText.textContent = '❌ Error checking FFmpeg status';
+                ffmpegStatusText.className = 'ffmpeg-unavailable';
+            }
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        
+        // Initialize everything
+        initWebSocket();
+        initCamera();
+        loadVideoList();
+        checkFFmpegStatus();
+        
+        // Auto-refresh video list every 30 seconds
+        setInterval(loadVideoList, 30000);
+    </script>
+</body>
+</html>

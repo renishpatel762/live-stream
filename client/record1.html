@@ -6,6 +6,7 @@
 </head>
 <body>
   <video id="preview" autoplay muted></video>
+  
   <button id="startBtn">Start</button>
   <button id="stopBtn">Stop</button>
 
@@ -17,10 +18,11 @@
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       document.getElementById("preview").srcObject = stream;
 
-      socket = new WebSocket("ws://localhost:8000");
-      socket.binaryType = "arraybuffer";
+      // socket = new WebSocket("ws://localhost:9090");
+      socket = new WebSocket("ws://localhost:3000");
+      // socket.binaryType = "arraybuffer";
 
-      mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8,opus" });
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8,opus' });
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0 && socket.readyState === WebSocket.OPEN) {

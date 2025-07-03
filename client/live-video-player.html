@@ -1,27 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Live Stream Viewer</title>
+  <meta charset="UTF-8" />
+  <title>Adaptive HLS Playback with CORS</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; }
+    video { width: 100%; max-width: 720px; border: 1px solid #ccc; }
+  </style>
 </head>
 <body>
-  <video id="video" controls autoplay></video>
+  <h2>Live Stream Player</h2>
+  <!-- Add crossorigin="anonymous" -->
+  <video
+    id="player"
+    controls
+    autoplay
+    muted
+    crossorigin="anonymous"
+  ></video>
 
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <script>
-    const video = document.getElementById('video');
-    const streamUrl = '/hls/stream.m3u8';
+    const video = document.getElementById('player');
 
     if (Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(streamUrl);
+      const hls = new Hls({
+        // ensure no credentials are sent with segment/playlist requests
+        xhrSetup: (xhr, url) => {
+          xhr.withCredentials = false;
+        }
+      });
+      hls.loadSource('http://localhost:8000/hls/master.m3u8');
       hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => video.play());
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play();
+      });
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLS.js error:', data);
+      });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = streamUrl;
-      video.addEventListener('loadedmetadata', () => video.play());
+      // native HLS (Safari, some mobile browsers)
+      video.src = 'http://localhost:8000/hls/master.m3u8';
+      video.addEventListener('loadedmetadata', () => {
+        video.play();
+      });
     } else {
-      alert("HLS not supported");
+      console.error('HLS not supported in this browser');
     }
   </script>
 </body>

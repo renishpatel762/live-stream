@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Real-Time Video Recorder</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; margin-top: 2rem; }
+    video { width: 480px; height: auto; border: 1px solid #ccc; }
+    button { margin: 0.5rem; padding: 0.5rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Real-Time Video Recorder</h1>
+  <video id="preview" autoplay playsinline muted></video>
+  <div>
+    <button id="start">Start</button>
+    <button id="stop" disabled>Stop</button>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('start');
+    const stopBtn  = document.getElementById('stop');
+
+    let mediaRecorder, socket;
+
+    async function init() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      preview.srcObject = stream;
+
+      // connect WebSocket right away
+      socket = new WebSocket(`ws://http://localhost:9090`);
+      socket.binaryType = 'arraybuffer';
+
+      // when server finishes, notify user
+      socket.onclose = () => alert('Recording saved on server!');
+      socket.onerror = (e) => console.error('WebSocket error', e);
+
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8,opus' });
+
+      // send each chunk immediately
+      mediaRecorder.ondataavailable = ev => {
+        if (ev.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+          ev.data.arrayBuffer().then(buf => socket.send(buf));
+        }
+      };
+
+      mediaRecorder.onstart = () => {
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+      };
+      mediaRecorder.onstop = () => {
+        stopBtn.disabled = true;
+        startBtn.disabled = false;
+        socket.close();
+      };
+    }
+
+    startBtn.onclick = () => mediaRecorder.start(1000); 
+    // passing 1000ms means ondataavailable fires every 1 second
+
+    stopBtn.onclick = () => mediaRecorder.stop();
+
+    init().catch(console.error);
+  </script>
+</body>
+</html>

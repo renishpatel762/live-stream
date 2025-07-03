@@ -1,209 +1,620 @@
-import express from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
+import express, { Request, Response } from 'express';
+import { WebSocketServer } from 'ws';
+import { createServer } from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { spawn, ChildProcess } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import ffmpegPath from 'ffmpeg-static';
-import http from 'http';
+import { promisify } from 'util';
 
-const app: express.Application = express();
-const PORT: number = 8000;
-const videoDir: string = path.join(__dirname, '../videos/live');
+const app = express();
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
 
-// Ensure video directory exists
-if (!fs.existsSync(videoDir)) {
-  fs.mkdirSync(videoDir, { recursive: true });
-}
+// FFmpeg path
+const FFMPEG_PATH = 'C:/ffmpeg/bin/ffmpeg.exe';
 
-// Serve HLS video files and static client files
-app.use('/hls', express.static(videoDir));
-// app.use('/', express.static(path.join(__dirname, '../client')));
+// Serve static files
+app.use(express.static('public'));
 
-// Start the HTTP server
-const server: http.Server = app.listen(PORT, () => {
-  console.log(`HTTP server running on http://localhost:${PORT}`);
-});
+// Store for active live streams
+const liveStreams = new Map<string, {
+  id: string;
+  name: string;
+  ffmpegProcess: ChildProcess | null;
+  startTime: number;
+  viewers: Set<string>;
+  status: 'starting' | 'live' | 'stopping' | 'stopped';
+  inputPipe: any;
+  hlsDir: string;
+  sequenceNumber: number;
+  segments: string[];
+  maxSegments: number;
+}>();
 
-// Create WebSocket server
-const wss: WebSocketServer = new WebSocketServer({ server });
+// Store for connected clients
+const clients = new Map<string, {
+  ws: any;
+  currentStream: string | null;
+  isStreamer: boolean;
+}>();
 
-wss.on('connection', (ws: WebSocket) => {
-  console.log('Client connected');
-  let ffmpegProcess: ChildProcess | null = null;
-  let stdinClosed: boolean = false;
+// Ensure directories exist
+const uploadsDir = path.join(__dirname, 'uploads');
+const liveHlsDir = path.join(__dirname, 'live-hls');
+const formatsDir = path.join(__dirname, 'formats');
 
-  try {
-    const ffmpegArgs = [
-      // — increase input queues —
-      '-thread_queue_size', '512',
-      '-thread_queue_size', '512',
-
-      // — declare input & timestamp handling —
-      '-f', 'webm',
-      '-fflags', 'nobuffer+discardcorrupt+genpts',
-      '-use_wallclock_as_timestamps', '1',
-      '-avoid_negative_ts', 'make_zero',
-
-      // — force audio PTS regen & VFR sync —
-      '-af', 'aresample=async=1:min_hard_comp=0.100000:first_pts=0',
-      '-vsync', '1',
-
-      // — input pipe —
-      '-i', 'pipe:0',
-
-      // — video encoding —
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-g', '30',
-      '-sc_threshold', '0',
-      '-b:v', '3000k',
-
-      // — audio encoding (after filter) —
-      '-c:a', 'aac',
-      '-b:a', '128k',
-
-      // — HLS muxer —
-      '-f', 'hls',
-      '-hls_time', '2',
-      '-hls_list_size', '3',
-      '-hls_flags', 'delete_segments+append_list+program_date_time',
-      '-master_pl_name', 'stream.m3u8',
-      '-hls_segment_filename', path.join(videoDir, 'chunk_%03d.ts'),
-
-      // — output playlist —
-      path.join(videoDir, 'stream.m3u8')
-    ];
-    
-    ffmpegProcess = spawn(ffmpegPath as string, ffmpegArgs);
-    // ffmpegProcess = spawn(ffmpegPath as string, [
-    // // 1) Declare that the incoming stream is WebM
-    //  '-f', 'webm',
-    //   '-preset', 'veryfast',
-    //   '-g', '30',
-    //   '-sc_threshold', '0',
-    //   '-map', '0:v:0', '-map', '0:a:0',
-    //   '-c:v', 'libx264',
-    //   '-c:a', 'aac',
-    //   '-b:v:0', '3000k',
-    //   '-b:a', '128k',
-    //   '-f', 'hls',
-    //   '-hls_time', '2',
-    //   '-hls_list_size', '3',
-    //   '-hls_flags', 'delete_segments+append_list+program_date_time',
-    //   '-master_pl_name', 'stream.m3u8',
-    //   '-hls_segment_filename', path.join(videoDir, 'chunk_%03d.ts'),
-    //   path.join(videoDir, 'stream.m3u8')
-    // ]);
-
-    // Ensure stdin exists
-    if (!ffmpegProcess.stdin) {
-      console.error('FFmpeg process has no stdin');
-      return;
-    }
-
-    // Handle FFmpeg process errors
-    ffmpegProcess.on('error', (err: Error) => {
-      console.error('FFmpeg process error:', err);
-    });
-
-    // Handle FFmpeg stdout (not typically used for FFmpeg)
-    if (ffmpegProcess.stdout) {
-      ffmpegProcess.stdout.on('data', (data: Buffer) => {
-        // Handle FFmpeg stdout if needed
-      });
-    }
-
-    // Handle FFmpeg stderr (where FFmpeg logs appear)
-    if (ffmpegProcess.stderr) {
-      ffmpegProcess.stderr.on('data', (data: Buffer) => {
-        console.error('FFmpeg:', data.toString());
-      });
-    }
-
-    // Handle FFmpeg process exit
-    ffmpegProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      if (code !== null) {
-        console.log(`FFmpeg process exited with code ${code}`);
-      } else if (signal) {
-        console.log(`FFmpeg process killed with signal ${signal}`);
-      }
-    });
-
-    // Handle stdin errors
-    ffmpegProcess.stdin.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EPIPE' || err.code === 'EOF') {
-        console.log('FFmpeg stdin has been closed');
-      } else {
-        console.error('FFmpeg stdin error:', err);
-      }
-    });
-
-    // Handle incoming WebSocket messages
-    ws.on('message', (msg: Buffer) => {
-      if (ffmpegProcess && ffmpegProcess.stdin && ffmpegProcess.stdin.writable && !stdinClosed) {
-        try {
-          // Write the data to FFmpeg's stdin
-          const writeResult: boolean = ffmpegProcess.stdin.write(msg);
-          
-          // If the buffer is full, wait for drain before writing more
-          if (!writeResult) {
-            ffmpegProcess.stdin.once('drain', () => {
-              // The buffer is empty again, can continue writing
-            });
-          }
-        } catch (err) {
-          console.error('Error writing to FFmpeg stdin:', err);
-        }
-      }
-    });
-
-    // Handle WebSocket close
-    ws.on('close', () => {
-      // Mark stdin as closed to prevent further writes
-      stdinClosed = true;
-      
-      // Close FFmpeg stdin stream gracefully
-      if (ffmpegProcess && ffmpegProcess.stdin) {
-        try {
-          ffmpegProcess.stdin.end();
-        } catch (err) {
-          console.error('Error closing FFmpeg stdin:', err);
-        }
-      }
-      
-      // Give FFmpeg a moment to finish processing, then kill the process
-      setTimeout(() => {
-        if (ffmpegProcess) {
-          try {
-            ffmpegProcess.kill('SIGTERM');
-          } catch (err) {
-            console.error('Error killing FFmpeg process:', err);
-          }
-        }
-      }, 500);
-      
-      console.log('Client disconnected, FFmpeg stopped.');
-    });
-
-    // Handle WebSocket errors
-    ws.on('error', (err: Error) => {
-      console.error('WebSocket error:', err);
-    });
-  } catch (err) {
-    console.error('Error setting up FFmpeg process:', err);
+[uploadsDir, liveHlsDir, formatsDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 });
 
-// Handle process termination
-process.on('SIGINT', () => {
-  console.log('Shutting down server...');
-  server.close(() => {
-    console.log('Server shut down.');
-    process.exit(0);
+// HLS configuration
+const HLS_CONFIG = {
+  segmentDuration: 6, // seconds
+  maxSegments: 10, // keep last 10 segments
+  targetLatency: 18 // 3 segments * 6 seconds
+};
+
+// Check if FFmpeg is available
+function checkFFmpeg(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const ffmpeg = spawn(FFMPEG_PATH, ['-version']);
+    ffmpeg.on('close', (code) => {
+      resolve(code === 0);
+    });
+    ffmpeg.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+// Create live HLS stream
+function createLiveHLSStream(streamId: string, streamName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const hlsDir = path.join(liveHlsDir, streamId);
+    
+    // Clean up existing directory
+    if (fs.existsSync(hlsDir)) {
+      fs.rmSync(hlsDir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(hlsDir, { recursive: true });
+
+    const stream = liveStreams.get(streamId);
+    if (!stream) {
+      reject(new Error('Stream not found'));
+      return;
+    }
+
+    // FFmpeg arguments for live HLS transcoding
+    const ffmpegArgs = [
+      '-f', 'webm',
+      '-i', 'pipe:0', // Read from stdin
+      
+      // Video encoding settings
+      '-c:v', 'libx264',
+      '-preset', 'veryfast', // Fast encoding for real-time
+      '-tune', 'zerolatency', // Minimize latency
+      '-profile:v', 'baseline',
+      '-level', '3.0',
+      
+      // Multiple quality outputs
+      '-map', '0:v', '-map', '0:a',
+      '-map', '0:v', '-map', '0:a',
+      '-map', '0:v', '-map', '0:a',
+      
+      // 720p output
+      '-s:v:0', '1280x720',
+      '-b:v:0', '2500k',
+      '-maxrate:v:0', '2750k',
+      '-bufsize:v:0', '5000k',
+      '-b:a:0', '128k',
+      
+      // 480p output
+      '-s:v:1', '854x480',
+      '-b:v:1', '1000k',
+      '-maxrate:v:1', '1100k',
+      '-bufsize:v:1', '2000k',
+      '-b:a:1', '96k',
+      
+      // 360p output
+      '-s:v:2', '640x360',
+      '-b:v:2', '500k',
+      '-maxrate:v:2', '550k',
+      '-bufsize:v:2', '1000k',
+      '-b:a:2', '64k',
+      
+      // HLS output settings
+      '-f', 'hls',
+      '-hls_time', HLS_CONFIG.segmentDuration.toString(),
+      '-hls_list_size', HLS_CONFIG.maxSegments.toString(),
+      '-hls_flags', 'delete_segments+independent_segments',
+      '-hls_segment_type', 'mpegts',
+      '-hls_segment_filename', path.join(hlsDir, 'segment_%v_%03d.ts'),
+      
+      // Master playlist with variant streams
+      '-master_pl_name', 'master.m3u8',
+      '-var_stream_map', 'v:0,a:0 v:1,a:1 v:2,a:2',
+      
+      path.join(hlsDir, 'stream_%v.m3u8')
+    ];
+
+    console.log(`Starting FFmpeg process for stream ${streamId}`);
+    const ffmpegProcess = spawn(FFMPEG_PATH, ffmpegArgs);
+    
+    stream.ffmpegProcess = ffmpegProcess;
+    stream.hlsDir = hlsDir;
+    stream.inputPipe = ffmpegProcess.stdin;
+
+    ffmpegProcess.stdout.on('data', (data) => {
+      console.log(`FFmpeg stdout: ${data}`);
+    });
+
+    ffmpegProcess.stderr.on('data', (data) => {
+      const output = data.toString();
+      console.log(`FFmpeg stderr: ${output}`);
+      
+      // Check if HLS is generating segments
+      if (output.includes('Opening') && output.includes('.ts')) {
+        if (stream.status === 'starting') {
+          stream.status = 'live';
+          console.log(`Stream ${streamId} is now live`);
+          
+          // Notify all viewers
+          notifyViewers(streamId, {
+            type: 'stream-live',
+            streamId: streamId,
+            streamName: streamName,
+            hlsUrl: `/api/live-hls/${streamId}/master.m3u8`
+          });
+        }
+      }
+    });
+
+    ffmpegProcess.on('close', (code) => {
+      console.log(`FFmpeg process closed with code ${code}`);
+      stream.status = 'stopped';
+      stream.ffmpegProcess = null;
+      
+      // Notify viewers that stream ended
+      notifyViewers(streamId, {
+        type: 'stream-ended',
+        streamId: streamId
+      });
+    });
+
+    ffmpegProcess.on('error', (error) => {
+      console.error('FFmpeg error:', error);
+      stream.status = 'stopped';
+      reject(error);
+    });
+
+    // Wait a bit for FFmpeg to initialize
+    setTimeout(() => {
+      resolve();
+    }, 2000);
+  });
+}
+
+// Notify all viewers of a stream
+function notifyViewers(streamId: string, message: any) {
+  const stream = liveStreams.get(streamId);
+  if (stream) {
+    stream.viewers.forEach(clientId => {
+      const client = clients.get(clientId);
+      if (client && client.ws.readyState === 1) {
+        client.ws.send(JSON.stringify(message));
+      }
+    });
+  }
+}
+
+// Broadcast message to all connected clients
+function broadcastToAll(message: any) {
+  clients.forEach(client => {
+    if (client.ws.readyState === 1) {
+      client.ws.send(JSON.stringify(message));
+    }
+  });
+}
+
+// Get list of active streams
+function getActiveStreams() {
+  const streams: any[] = [];
+  liveStreams.forEach((stream, streamId) => {
+    streams.push({
+      id: streamId,
+      name: stream.name,
+      status: stream.status,
+      viewers: stream.viewers.size,
+      startTime: stream.startTime,
+      uptime: Date.now() - stream.startTime
+    });
+  });
+  return streams;
+}
+
+// WebSocket connection handler
+wss.on('connection', (ws) => {
+  const clientId = uuidv4();
+  console.log(`Client connected: ${clientId}`);
+  
+  clients.set(clientId, {
+    ws: ws,
+    currentStream: null,
+    isStreamer: false
+  });
+
+  // Send current active streams to new client
+  ws.send(JSON.stringify({
+    type: 'active-streams',
+    streams: getActiveStreams()
+  }));
+
+  ws.on('message', async (data) => {
+    try {
+      const message = JSON.parse(data.toString());
+      const client = clients.get(clientId);
+      
+      if (!client) return;
+      
+      switch (message.type) {
+        case 'start-live-stream':
+          const streamId = uuidv4();
+          const streamName = message.streamName || `Stream ${Date.now()}`;
+          
+          // Create new live stream
+          liveStreams.set(streamId, {
+            id: streamId,
+            name: streamName,
+            ffmpegProcess: null,
+            startTime: Date.now(),
+            viewers: new Set(),
+            status: 'starting',
+            inputPipe: null,
+            hlsDir: '',
+            sequenceNumber: 0,
+            segments: [],
+            maxSegments: HLS_CONFIG.maxSegments
+          });
+          
+          client.isStreamer = true;
+          client.currentStream = streamId;
+          
+          try {
+            await createLiveHLSStream(streamId, streamName);
+            
+            ws.send(JSON.stringify({
+              type: 'stream-started',
+              streamId: streamId,
+              streamName: streamName
+            }));
+            
+            // Broadcast new stream to all clients
+            broadcastToAll({
+              type: 'new-stream',
+              stream: {
+                id: streamId,
+                name: streamName,
+                status: 'starting',
+                viewers: 0,
+                startTime: Date.now()
+              }
+            });
+            
+            console.log(`Live stream started: ${streamId} - ${streamName}`);
+            
+          } catch (error) {
+            console.error('Failed to create live stream:', error);
+            liveStreams.delete(streamId);
+            ws.send(JSON.stringify({
+              type: 'stream-error',
+              error: 'Failed to start live stream'
+            }));
+          }
+          break;
+
+        case 'live-video-chunk':
+          if (client.currentStream && client.isStreamer) {
+            const stream = liveStreams.get(client.currentStream);
+            if (stream && stream.inputPipe && stream.status !== 'stopped') {
+              try {
+                const chunk = Buffer.from(message.data, 'base64');
+                stream.inputPipe.write(chunk);
+              } catch (error) {
+                console.error('Error writing to FFmpeg pipe:', error);
+              }
+            }
+          }
+          break;
+
+        case 'stop-live-stream':
+          if (client.currentStream && client.isStreamer) {
+            const stream = liveStreams.get(client.currentStream);
+            if (stream) {
+              stream.status = 'stopping';
+              
+              // Close FFmpeg input
+              if (stream.inputPipe) {
+                stream.inputPipe.end();
+              }
+              
+              // Kill FFmpeg process
+              if (stream.ffmpegProcess) {
+                stream.ffmpegProcess.kill('SIGTERM');
+              }
+              
+              // Clean up after a delay
+              setTimeout(() => {
+                liveStreams.delete(client.currentStream!);
+                
+                // Clean up HLS files
+                if (stream.hlsDir && fs.existsSync(stream.hlsDir)) {
+                  fs.rmSync(stream.hlsDir, { recursive: true, force: true });
+                }
+              }, 5000);
+              
+              ws.send(JSON.stringify({
+                type: 'stream-stopped',
+                streamId: client.currentStream
+              }));
+              
+              // Broadcast stream ended
+              broadcastToAll({
+                type: 'stream-ended',
+                streamId: client.currentStream
+              });
+              
+              client.currentStream = null;
+              client.isStreamer = false;
+            }
+          }
+          break;
+
+        case 'join-stream':
+          const joinStreamId = message.streamId;
+          const stream = liveStreams.get(joinStreamId);
+          
+          if (stream) {
+            // Remove from previous stream
+            if (client.currentStream) {
+              const prevStream = liveStreams.get(client.currentStream);
+              if (prevStream) {
+                prevStream.viewers.delete(clientId);
+              }
+            }
+            
+            // Add to new stream
+            stream.viewers.add(clientId);
+            client.currentStream = joinStreamId;
+            
+            ws.send(JSON.stringify({
+              type: 'joined-stream',
+              streamId: joinStreamId,
+              streamName: stream.name,
+              hlsUrl: `/api/live-hls/${joinStreamId}/master.m3u8`,
+              status: stream.status
+            }));
+            
+            // Update viewer count
+            broadcastToAll({
+              type: 'viewer-count-update',
+              streamId: joinStreamId,
+              viewers: stream.viewers.size
+            });
+            
+            console.log(`Client ${clientId} joined stream ${joinStreamId}`);
+          } else {
+            ws.send(JSON.stringify({
+              type: 'stream-not-found',
+              streamId: joinStreamId
+            }));
+          }
+          break;
+
+        case 'leave-stream':
+          if (client.currentStream) {
+            const stream = liveStreams.get(client.currentStream);
+            if (stream) {
+              stream.viewers.delete(clientId);
+              
+              // Update viewer count
+              broadcastToAll({
+                type: 'viewer-count-update',
+                streamId: client.currentStream,
+                viewers: stream.viewers.size
+              });
+            }
+            
+            client.currentStream = null;
+            
+            ws.send(JSON.stringify({
+              type: 'left-stream'
+            }));
+          }
+          break;
+
+        case 'get-active-streams':
+          ws.send(JSON.stringify({
+            type: 'active-streams',
+            streams: getActiveStreams()
+          }));
+          break;
+
+        default:
+          console.log('Unknown message type:', message.type);
+      }
+    } catch (error) {
+      console.error('Error processing message:', error);
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: 'Error processing message'
+      }));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log(`Client disconnected: ${clientId}`);
+    
+    const client = clients.get(clientId);
+    if (client) {
+      // If client was streaming, stop the stream
+      if (client.isStreamer && client.currentStream) {
+        const stream = liveStreams.get(client.currentStream);
+        if (stream) {
+          stream.status = 'stopping';
+          
+          if (stream.inputPipe) {
+            stream.inputPipe.end();
+          }
+          
+          if (stream.ffmpegProcess) {
+            stream.ffmpegProcess.kill('SIGTERM');
+          }
+          
+          // Clean up
+          setTimeout(() => {
+            liveStreams.delete(client.currentStream!);
+            if (stream.hlsDir && fs.existsSync(stream.hlsDir)) {
+              fs.rmSync(stream.hlsDir, { recursive: true, force: true });
+            }
+          }, 5000);
+          
+          broadcastToAll({
+            type: 'stream-ended',
+            streamId: client.currentStream
+          });
+        }
+      }
+      
+      // Remove from stream viewers
+      if (client.currentStream) {
+        const stream = liveStreams.get(client.currentStream);
+        if (stream) {
+          stream.viewers.delete(clientId);
+          
+          broadcastToAll({
+            type: 'viewer-count-update',
+            streamId: client.currentStream,
+            viewers: stream.viewers.size
+          });
+        }
+      }
+    }
+    
+    clients.delete(clientId);
+  });
+
+  ws.on('error', (error) => {
+    console.error('WebSocket error:', error);
   });
 });
 
-process.on('uncaughtException', (err: Error) => {
-  console.error('Uncaught exception:', err);
-  // Keep the server running despite uncaught exceptions
+// API endpoint to serve live HLS streams
+app.get('/api/live-hls/:streamId/:filename', (req: any, res: any) => {
+  const { streamId, filename } = req.params;
+  const stream = liveStreams.get(streamId);
+  
+  if (!stream) {
+    return res.status(404).json({ error: 'Stream not found' });
+  }
+  
+  const filePath = path.join(stream.hlsDir, filename);
+  
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  
+  // Set appropriate headers
+  if (filename.endsWith('.m3u8')) {
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  } else if (filename.endsWith('.ts')) {
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+  }
+  
+  // CORS headers
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control');
+  
+  res.sendFile(filePath);
 });
+
+// API endpoint to get active streams
+app.get('/api/live-streams', (req: Request, res: Response) => {
+  res.json({
+    streams: getActiveStreams()
+  });
+});
+
+// API endpoint to get stream info
+app.get('/api/live-streams/:streamId', (req: any, res: any) => {
+  const streamId = req.params.streamId;
+  const stream = liveStreams.get(streamId);
+  
+  if (!stream) {
+    return res.status(404).json({ error: 'Stream not found' });
+  }
+  
+  res.json({
+    id: stream.id,
+    name: stream.name,
+    status: stream.status,
+    viewers: stream.viewers.size,
+    startTime: stream.startTime,
+    uptime: Date.now() - stream.startTime,
+    hlsUrl: `/api/live-hls/${streamId}/master.m3u8`
+  });
+});
+
+// Health check endpoint
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'healthy',
+    activeStreams: liveStreams.size,
+    connectedClients: clients.size,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// API endpoint to check FFmpeg status
+app.get('/api/ffmpeg/status', async (req: Request, res: Response) => {
+  try {
+    const available = await checkFFmpeg();
+    res.json({ available, path: FFMPEG_PATH });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.json({ available: false, error: errorMessage });
+  }
+});
+
+// Cleanup function
+process.on('SIGINT', () => {
+  console.log('Shutting down server...');
+  
+  // Stop all active streams
+  liveStreams.forEach((stream) => {
+    if (stream.ffmpegProcess) {
+      stream.ffmpegProcess.kill('SIGTERM');
+    }
+  });
+  
+  // Clean up HLS directories
+  if (fs.existsSync(liveHlsDir)) {
+    fs.rmSync(liveHlsDir, { recursive: true, force: true });
+  }
+  
+  process.exit(0);
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`FFmpeg path: ${FFMPEG_PATH}`);
+  console.log('Real-time HLS streaming server ready');
+});
+
+export default server;
