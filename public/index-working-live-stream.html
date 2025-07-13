@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Streaming Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .controls {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .control-group {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .control-group h3 {
+            margin-bottom: 15px;
+            color: #ffd700;
+        }
+
+        button {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .success {
+            background: linear-gradient(45deg, #2dd36f, #10dc60);
+        }
+
+        .warning {
+            background: linear-gradient(45deg, #ffc409, #ffab00);
+        }
+
+        input[type="text"] {
+            padding: 10px;
+            border: none;
+            border-radius: 10px;
+            margin-right: 10px;
+            font-size: 1rem;
+            background: rgba(255,255,255,0.9);
+            color: #333;
+        }
+
+        .video-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .video-section {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .video-section h3 {
+            margin-bottom: 15px;
+            color: #ffd700;
+        }
+
+        video {
+            width: 100%;
+            height: 300px;
+            border-radius: 10px;
+            background: #000;
+            object-fit: cover;
+        }
+
+        .status {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 10px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .status.connected {
+            background: rgba(45, 211, 111, 0.3);
+            border: 1px solid #2dd36f;
+        }
+
+        .status.streaming {
+            background: rgba(255, 193, 7, 0.3);
+            border: 1px solid #ffc107;
+        }
+
+        .status.error {
+            background: rgba(220, 53, 69, 0.3);
+            border: 1px solid #dc3545;
+        }
+
+        .streams-list {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .streams-list h3 {
+            margin-bottom: 15px;
+            color: #ffd700;
+        }
+
+        .stream-item {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stream-info {
+            flex: 1;
+        }
+
+        .stream-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stream-details {
+            font-size: 0.9rem;
+            opacity: 0.8;
+        }
+
+        .stream-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .stream-actions button {
+            padding: 8px 16px;
+            font-size: 0.9rem;
+        }
+
+        .viewer-count {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            margin-left: 10px;
+        }
+
+        .debug-info {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            max-height: 500px;
+            overflow-y: scroll;
+        }
+
+        @media (max-width: 768px) {
+            .video-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .control-group {
+                width: 100%;
+                max-width: 400px;
+            }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Live Streaming Platform</h1>
+            <p>Real-time HLS streaming to multiple viewers</p>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <h3>🎬 Start Broadcasting</h3>
+                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                    <input type="text" id="streamName" placeholder="Enter stream name..." value="My Live Stream">
+                    <button id="startStreamBtn">Start Stream</button>
+                </div>
+                <button id="stopStreamBtn" disabled class="warning">Stop Stream</button>
+            </div>
+
+            <div class="control-group">
+                <h3>📡 Connection Status</h3>
+                <div id="connectionStatus" class="status">Connecting...</div>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <div class="video-section">
+                <h3>📹 Your Stream (Broadcasting)</h3>
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div id="streamStatus" class="status">Ready to stream</div>
+                <div id="debugInfo" class="debug-info"></div>
+            </div>
+
+            <div class="video-section">
+                <h3>👀 Watching Stream</h3>
+                <video id="remoteVideo" controls playsinline></video>
+                <div id="viewerStatus" class="status">Select a stream to watch</div>
+            </div>
+        </div>
+
+        <div class="streams-list">
+            <h3>🌐 Live Streams</h3>
+            <div id="activeStreams">
+                <p style="text-align: center; opacity: 0.7;">No active streams</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.4.12/hls.min.js"></script>
+    <script>
+        class LiveStreamingClient {
+            constructor() {
+                this.ws = null;
+                this.localStream = null;
+                this.mediaRecorder = null;
+                this.currentStreamId = null;
+                this.isStreaming = false;
+                this.currentWatchingStream = null;
+                this.hlsPlayer = null;
+                this.chunkCount = 0;
+                this.totalBytes = 0;
+                
+                this.initializeElements();
+                this.setupEventListeners();
+                this.connect();
+            }
+
+            initializeElements() {
+                this.startStreamBtn = document.getElementById('startStreamBtn');
+                this.stopStreamBtn = document.getElementById('stopStreamBtn');
+                this.streamNameInput = document.getElementById('streamName');
+                this.localVideo = document.getElementById('localVideo');
+                this.remoteVideo = document.getElementById('remoteVideo');
+                this.connectionStatus = document.getElementById('connectionStatus');
+                this.streamStatus = document.getElementById('streamStatus');
+                this.viewerStatus = document.getElementById('viewerStatus');
+                this.activeStreamsDiv = document.getElementById('activeStreams');
+                this.debugInfo = document.getElementById('debugInfo');
+            }
+
+            setupEventListeners() {
+                this.startStreamBtn.addEventListener('click', () => this.startStreaming());
+                this.stopStreamBtn.addEventListener('click', () => this.stopStreaming());
+            }
+
+            async connect() {
+                try {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}`;
+                    
+                    this.ws = new WebSocket(wsUrl);
+                    
+                    this.ws.onopen = () => {
+                        console.log('Connected to server');
+                        this.updateConnectionStatus('Connected', 'connected');
+                    };
+                    
+                    this.ws.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        this.handleMessage(message);
+                    };
+                    
+                    this.ws.onclose = () => {
+                        console.log('Disconnected from server');
+                        this.updateConnectionStatus('Disconnected', 'error');
+                        setTimeout(() => this.connect(), 3000);
+                    };
+                    
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateConnectionStatus('Connection Error', 'error');
+                    };
+                    
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    this.updateConnectionStatus('Connection Failed', 'error');
+                }
+            }
+
+            handleMessage(message) {
+                console.log('Received message:', message);
+                
+                switch (message.type) {
+                    case 'stream-started':
+                        this.currentStreamId = message.streamId;
+                        this.isStreaming = true;
+                        this.updateStreamStatus('🔴 Streaming Live', 'streaming');
+                        this.startStreamBtn.disabled = true;
+                        this.stopStreamBtn.disabled = false;
+                        this.updateDebugInfo('Stream started successfully');
+                        break;
+                        
+                    case 'stream-stopped':
+                        this.isStreaming = false;
+                        this.currentStreamId = null;
+                        this.updateStreamStatus('Stream Stopped', 'connected');
+                        this.startStreamBtn.disabled = false;
+                        this.stopStreamBtn.disabled = true;
+                        this.updateDebugInfo('Stream stopped');
+                        break;
+                        
+                    case 'stream-error':
+                        this.updateStreamStatus(`Error: ${message.error}`, 'error');
+                        this.startStreamBtn.disabled = false;
+                        this.stopStreamBtn.disabled = true;
+                        this.isStreaming = false;
+                        this.updateDebugInfo(`Stream error: ${message.error}`);
+                        break;
+                        
+                    case 'active-streams':
+                        this.updateActiveStreams(message.streams);
+                        break;
+                        
+                    case 'new-stream':
+                        this.addStreamToList(message.stream);
+                        break;
+                        
+                    case 'stream-ended':
+                        this.removeStreamFromList(message.streamId);
+                        if (this.currentWatchingStream === message.streamId) {
+                            this.stopWatching();
+                        }
+                        break;
+                        
+                    case 'viewer-count-update':
+                        this.updateViewerCount(message.streamId, message.viewers);
+                        break;
+                        
+                    case 'joined-stream':
+                        this.startWatching(message.hlsUrl, message.streamName);
+                        break;
+                        
+                    case 'stream-live':
+                        this.updateDebugInfo(`Stream ${message.streamId} is now live`);
+                        break;
+                        
+                    case 'stream-not-found':
+                        this.updateViewerStatus('Stream not found', 'error');
+                        break;
+                }
+            }
+
+            async startStreaming() {
+                try {
+                    const streamName = this.streamNameInput.value.trim() || 'My Live Stream';
+                    
+                    this.updateDebugInfo('Requesting camera access...');
+                    
+                    // Get user media with optimized settings
+                    this.localStream = await navigator.mediaDevices.getUserMedia({
+                        video: { 
+                            width: { ideal: 1280 }, 
+                            height: { ideal: 720 },
+                            frameRate: { ideal: 30 }
+                        },
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            sampleRate: 44100
+                        }
+                    });
+                    
+                    this.localVideo.srcObject = this.localStream;
+                    this.updateDebugInfo('Camera access granted');
+                    
+                    // Check if MediaRecorder supports the format
+                    const mimeType = 'video/webm;codecs=vp8,opus';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        throw new Error('WebM format not supported');
+                    }
+                    
+                    // Setup MediaRecorder with optimized settings
+                    this.mediaRecorder = new MediaRecorder(this.localStream, {
+                        mimeType: mimeType,
+                        videoBitsPerSecond: 1000000, // 1 Mbps
+                        audioBitsPerSecond: 128000   // 128 kbps
+                    });
+                    
+                    this.chunkCount = 0;
+                    this.totalBytes = 0;
+                    
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0 && this.ws?.readyState === WebSocket.OPEN) {
+                            this.chunkCount++;
+                            this.totalBytes += event.data.size;
+                            this.updateDebugInfo(`Chunk ${this.chunkCount}: ${event.data.size} bytes (Total: ${this.totalBytes})`);
+                            this.sendVideoChunk(event.data);
+                        }
+                    };
+                    
+                    this.mediaRecorder.onstart = () => {
+                        this.updateDebugInfo('MediaRecorder started');
+                    };
+                    
+                    this.mediaRecorder.onstop = () => {
+                        this.updateDebugInfo('MediaRecorder stopped');
+                    };
+                    
+                    this.mediaRecorder.onerror = (event) => {
+                        console.error('MediaRecorder error:', event.error);
+                        this.updateDebugInfo(`MediaRecorder error: ${event.error}`);
+                    };
+                    
+                    // Start recording with shorter chunks for better real-time performance
+                    this.mediaRecorder.start(500); // 500ms chunks
+                    this.updateDebugInfo('MediaRecorder started with 500ms chunks');
+                    
+                    // Tell server to start live stream
+                    this.ws.send(JSON.stringify({
+                        type: 'start-live-stream',
+                        streamName: streamName
+                    }));
+                    
+                    this.updateStreamStatus('🟡 Starting stream...', 'streaming');
+                    this.startStreamBtn.disabled = true;
+                    
+                } catch (error) {
+                    console.error('Error starting stream:', error);
+                    this.updateStreamStatus(`Error: ${error.message}`, 'error');
+                    this.updateDebugInfo(`Error starting stream: ${error.message}`);
+                }
+            }
+
+            async sendVideoChunk(data) {
+                try {
+                    const arrayBuffer = await data.arrayBuffer();
+                    const uint8Array = new Uint8Array(arrayBuffer);
+                    
+                    // Convert to base64 - more efficient approach
+                    let binary = '';
+                    const chunkSize = 0x8000; // 32KB chunks
+                    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+                        binary += String.fromCharCode.apply(null, uint8Array.subarray(i, i + chunkSize));
+                    }
+                    const base64 = btoa(binary);
+                    
+                    if (this.ws?.readyState === WebSocket.OPEN) {
+                        this.ws.send(JSON.stringify({
+                            type: 'live-video-chunk',
+                            data: base64,
+                            timestamp: Date.now()
+                        }));
+                    }
+                } catch (error) {
+                    console.error('Error sending video chunk:', error);
+                    this.updateDebugInfo(`Error sending chunk: ${error.message}`);
+                }
+            }
+
+            stopStreaming() {
+                if (this.mediaRecorder) {
+                    this.mediaRecorder.stop();
+                    this.mediaRecorder = null;
+                }
+                
+                if (this.localStream) {
+                    this.localStream.getTracks().forEach(track => track.stop());
+                    this.localStream = null;
+                }
+                
+                this.localVideo.srcObject = null;
+                
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'stop-live-stream'
+                    }));
+                }
+                
+                this.updateStreamStatus('Stream Stopped', 'connected');
+                this.startStreamBtn.disabled = false;
+                this.stopStreamBtn.disabled = true;
+                this.isStreaming = false;
+                this.currentStreamId = null;
+                this.updateDebugInfo('Stream stopped manually');
+            }
+
+            joinStream(streamId) {
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'join-stream',
+                        streamId: streamId
+                    }));
+                    this.currentWatchingStream = streamId;
+                    this.updateViewerStatus('🟡 Connecting to stream...', 'streaming');
+                }
+            }
+
+            leaveStream() {
+                if (this.ws?.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'leave-stream'
+                    }));
+                }
+                this.stopWatching();
+            }
+
+            startWatching(hlsUrl, streamName) {
+                this.updateViewerStatus(`📺 Watching: ${streamName}`, 'connected');
+                
+                if (Hls.isSupported()) {
+                    if (this.hlsPlayer) {
+                        this.hlsPlayer.destroy();
+                    }
+                    
+                    this.hlsPlayer = new Hls({
+                        enableWorker: false,
+                        lowLatencyMode: true,
+                        backBufferLength: 90,
+                        maxBufferLength: 30,
+                        maxMaxBufferLength: 60,
+                        liveSyncDurationCount: 3,
+                        liveMaxLatencyDurationCount: 10
+                    });
+                    
+                    this.hlsPlayer.loadSource(hlsUrl);
+                    this.hlsPlayer.attachMedia(this.remoteVideo);
+                    
+                    this.hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+                        this.remoteVideo.play();
+                    });
+                    
+                    this.hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
+                        console.error('HLS Error:', data);
+                        if (data.fatal) {
+                            this.updateViewerStatus('Stream Error', 'error');
+                        }
+                    });
+                    
+                } else if (this.remoteVideo.canPlayType('application/vnd.apple.mpegurl')) {
+                    this.remoteVideo.src = hlsUrl;
+                    this.remoteVideo.play();
+                } else {
+                    this.updateViewerStatus('HLS not supported', 'error');
+                }
+            }
+
+            stopWatching() {
+                if (this.hlsPlayer) {
+                    this.hlsPlayer.destroy();
+                    this.hlsPlayer = null;
+                }
+                
+                this.remoteVideo.src = '';
+                this.remoteVideo.load();
+                this.currentWatchingStream = null;
+                this.updateViewerStatus('Select a stream to watch', 'connected');
+            }
+
+            updateConnectionStatus(message, type) {
+                this.connectionStatus.textContent = message;
+                this.connectionStatus.className = `status ${type}`;
+            }
+
+            updateStreamStatus(message, type) {
+                this.streamStatus.textContent = message;
+                this.streamStatus.className = `status ${type}`;
+            }
+
+            updateViewerStatus(message, type) {
+                this.viewerStatus.textContent = message;
+                this.viewerStatus.className = `status ${type}`;
+            }
+
+            updateDebugInfo(message) {
+                const timestamp = new Date().toLocaleTimeString();
+                this.debugInfo.innerHTML += `<div>${timestamp}: ${message}</div>`;
+                this.debugInfo.scrollTop = this.debugInfo.scrollHeight;
+            }
+
+            updateActiveStreams(streams) {
+                if (streams.length === 0) {
+                    this.activeStreamsDiv.innerHTML = '<p style="text-align: center; opacity: 0.7;">No active streams</p>';
+                    return;
+                }
+                
+                this.activeStreamsDiv.innerHTML = '';
+                streams.forEach(stream => {
+                    this.addStreamToList(stream);
+                });
+            }
+
+            addStreamToList(stream) {
+                const existingStream = document.querySelector(`[data-stream-id="${stream.id}"]`);
+                if (existingStream) {
+                    return;
+                }
+                
+                const streamDiv = document.createElement('div');
+                streamDiv.className = 'stream-item';
+                streamDiv.setAttribute('data-stream-id', stream.id);
+                
+                const uptime = Math.floor((Date.now() - stream.startTime) / 1000);
+                const uptimeStr = this.formatUptime(uptime);
+                
+                streamDiv.innerHTML = `
+                    <div class="stream-info">
+                        <div class="stream-name">${stream.name}</div>
+                        <div class="stream-details">
+                            Status: ${stream.status} • Uptime: ${uptimeStr}
+                            <span class="viewer-count" data-stream-id="${stream.id}">👥 ${stream.viewers}</span>
+                        </div>
+                    </div>
+                    <div class="stream-actions">
+                        <button onclick="client.joinStream('${stream.id}')" class="success">
+                            ${this.currentWatchingStream === stream.id ? '👀 Watching' : '▶️ Watch'}
+                        </button>
+                        ${this.currentWatchingStream === stream.id ? 
+                            '<button onclick="client.leaveStream()" class="warning">❌ Leave</button>' : 
+                            ''
+                        }
+                    </div>
+                `;
+                
+                this.activeStreamsDiv.appendChild(streamDiv);
+            }
+
+            removeStreamFromList(streamId) {
+                const streamDiv = document.querySelector(`[data-stream-id="${streamId}"]`);
+                if (streamDiv) {
+                    streamDiv.remove();
+                }
+                
+                if (this.activeStreamsDiv.children.length === 0) {
+                    this.activeStreamsDiv.innerHTML = '<p style="text-align: center; opacity: 0.7;">No active streams</p>';
+                }
+            }
+
+            updateViewerCount(streamId, viewerCount) {
+                const viewerCountSpan = document.querySelector(`[data-stream-id="${streamId}"].viewer-count`);
+                if (viewerCountSpan) {
+                    viewerCountSpan.textContent = `👥 ${viewerCount}`;
+                }
+            }
+
+            formatUptime(seconds) {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                const secs = seconds % 60;
+                
+                if (hours > 0) {
+                    return `${hours}h ${minutes}m ${secs}s`;
+                } else if (minutes > 0) {
+                    return `${minutes}m ${secs}s`;
+                } else {
+                    return `${secs}s`;
+                }
+            }
+        }
+
+        // Initialize the client when the page loads
+        let client;
+        window.addEventListener('load', () => {
+            client = new LiveStreamingClient();
+        });
+    </script>
+</body>
+</html>

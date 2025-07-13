@@ -23,16 +23,13 @@ const liveStreams = new Map<string, {
   name: string;
   ffmpegProcess: ChildProcess | null;
   startTime: number;
-  endTime: number | null;
   viewers: Set<string>;
-  status: 'starting' | 'live' | 'stopping' | 'stopped' | 'archived';
+  status: 'starting' | 'live' | 'stopping' | 'stopped';
   inputPipe: any;
   hlsDir: string;
   sequenceNumber: number;
   segments: string[];
   maxSegments: number;
-  qualities: string[];
-  preserveAfterStop: boolean;
 }>();
 
 // Store for connected clients
@@ -40,16 +37,14 @@ const clients = new Map<string, {
   ws: any;
   currentStream: string | null;
   isStreamer: boolean;
-  selectedQuality: string;
 }>();
 
 // Ensure directories exist
 const uploadsDir = path.join(__dirname, 'uploads');
 const liveHlsDir = path.join(__dirname, 'live-hls');
-const archivedHlsDir = path.join(__dirname, 'archived-hls');
 const formatsDir = path.join(__dirname, 'formats');
 
-[uploadsDir, liveHlsDir, archivedHlsDir, formatsDir].forEach(dir => {
+[uploadsDir, liveHlsDir, formatsDir].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -58,13 +53,8 @@ const formatsDir = path.join(__dirname, 'formats');
 // HLS configuration
 const HLS_CONFIG = {
   segmentDuration: 6, // seconds
-  maxSegments: 10, // keep last 10 segments during live streaming
-  targetLatency: 18, // 3 segments * 6 seconds
-  qualities: [
-    { name: '720p', width: 1280, height: 720, bitrate: 2500, audioBitrate: 128 },
-    { name: '480p', width: 854, height: 480, bitrate: 1000, audioBitrate: 96 },
-    { name: '360p', width: 640, height: 360, bitrate: 500, audioBitrate: 64 }
-  ]
+  maxSegments: 10, // keep last 10 segments
+  targetLatency: 18 // 3 segments * 6 seconds
 };
 
 // Check if FFmpeg is available
@@ -97,7 +87,7 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       return;
     }
 
-    // FFmpeg arguments for live HLS transcoding with multiple qualities
+    // FFmpeg arguments for live HLS transcoding
     const ffmpegArgs = [
       '-f', 'webm',
       '-i', 'pipe:0', // Read from stdin
@@ -108,32 +98,27 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       '-tune', 'zerolatency', // Minimize latency
       '-profile:v', 'baseline',
       '-level', '3.0',
-      '-x264opts', 'keyint=60:min-keyint=60:scenecut=-1',
       
-      // Audio encoding
-      '-c:a', 'aac',
-      '-ac', '2',
+      // Multiple quality outputs
+      '-map', '0:v', '-map', '0:a',
+      '-map', '0:v', '-map', '0:a',
+      '-map', '0:v', '-map', '0:a',
       
-      // Create multiple quality outputs
-      '-map', '0:v', '-map', '0:a', // 720p
-      '-map', '0:v', '-map', '0:a', // 480p
-      '-map', '0:v', '-map', '0:a', // 360p
-      
-      // 720p settings
+      // 720p output
       '-s:v:0', '1280x720',
       '-b:v:0', '2500k',
       '-maxrate:v:0', '2750k',
       '-bufsize:v:0', '5000k',
       '-b:a:0', '128k',
       
-      // 480p settings
+      // 480p output
       '-s:v:1', '854x480',
       '-b:v:1', '1000k',
       '-maxrate:v:1', '1100k',
       '-bufsize:v:1', '2000k',
       '-b:a:1', '96k',
       
-      // 360p settings
+      // 360p output
       '-s:v:2', '640x360',
       '-b:v:2', '500k',
       '-maxrate:v:2', '550k',
@@ -146,16 +131,13 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       '-hls_list_size', HLS_CONFIG.maxSegments.toString(),
       '-hls_flags', 'delete_segments+independent_segments',
       '-hls_segment_type', 'mpegts',
-      '-hls_delete_threshold', '1',
+      '-hls_segment_filename', path.join(hlsDir, 'segment_%v_%03d.ts'),
       
-      // Segment naming
-      '-hls_segment_filename', path.join(hlsDir, '%v_segment_%03d.ts'),
-      
-      // Master playlist
+      // Master playlist with variant streams
       '-master_pl_name', 'master.m3u8',
-      '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p v:2,a:2,name:360p',
+      '-var_stream_map', 'v:0,a:0 v:1,a:1 v:2,a:2',
       
-      path.join(hlsDir, '%v.m3u8')
+      path.join(hlsDir, 'stream_%v.m3u8')
     ];
 
     console.log(`Starting FFmpeg process for stream ${streamId}`);
@@ -164,7 +146,6 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
     stream.ffmpegProcess = ffmpegProcess;
     stream.hlsDir = hlsDir;
     stream.inputPipe = ffmpegProcess.stdin;
-    stream.qualities = ['720p', '480p', '360p'];
 
     ffmpegProcess.stdout.on('data', (data) => {
       console.log(`FFmpeg stdout: ${data}`);
@@ -185,8 +166,7 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
             type: 'stream-live',
             streamId: streamId,
             streamName: streamName,
-            hlsUrl: `/api/live-hls/${streamId}/master.m3u8`,
-            qualities: stream.qualities
+            hlsUrl: `/api/live-hls/${streamId}/master.m3u8`
           });
         }
       }
@@ -194,26 +174,13 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
 
     ffmpegProcess.on('close', (code) => {
       console.log(`FFmpeg process closed with code ${code}`);
-      
-      if (stream.preserveAfterStop) {
-        // Archive the stream
-        archiveStream(streamId);
-      } else {
-        stream.status = 'stopped';
-        // Clean up HLS files if not preserving
-        if (fs.existsSync(hlsDir)) {
-          fs.rmSync(hlsDir, { recursive: true, force: true });
-        }
-      }
-      
+      stream.status = 'stopped';
       stream.ffmpegProcess = null;
-      stream.endTime = Date.now();
       
       // Notify viewers that stream ended
       notifyViewers(streamId, {
         type: 'stream-ended',
-        streamId: streamId,
-        archived: stream.preserveAfterStop
+        streamId: streamId
       });
     });
 
@@ -228,57 +195,6 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       resolve();
     }, 2000);
   });
-}
-
-// Archive stream after it stops
-function archiveStream(streamId: string) {
-  const stream = liveStreams.get(streamId);
-  if (!stream) return;
-
-  const sourceDir = stream.hlsDir;
-  const archiveDir = path.join(archivedHlsDir, streamId);
-
-  try {
-    // Create archive directory
-    if (!fs.existsSync(archiveDir)) {
-      fs.mkdirSync(archiveDir, { recursive: true });
-    }
-
-    // Copy all files to archive directory
-    const files = fs.readdirSync(sourceDir);
-    files.forEach(file => {
-      const sourcePath = path.join(sourceDir, file);
-      const destPath = path.join(archiveDir, file);
-      fs.copyFileSync(sourcePath, destPath);
-    });
-
-    // Update stream status
-    stream.status = 'archived';
-    stream.hlsDir = archiveDir;
-
-    // Create a final master playlist without the delete_segments flag
-    createArchiveMasterPlaylist(streamId, archiveDir);
-
-    console.log(`Stream ${streamId} archived successfully`);
-  } catch (error) {
-    console.error(`Error archiving stream ${streamId}:`, error);
-  }
-}
-
-// Create master playlist for archived content
-function createArchiveMasterPlaylist(streamId: string, archiveDir: string) {
-  const masterPlaylistContent = `#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720,NAME="720p"
-720p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480,NAME="480p"
-480p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=564000,RESOLUTION=640x360,NAME="360p"
-360p.m3u8
-`;
-
-  const masterPlaylistPath = path.join(archiveDir, 'master.m3u8');
-  fs.writeFileSync(masterPlaylistPath, masterPlaylistContent);
 }
 
 // Notify all viewers of a stream
@@ -303,7 +219,7 @@ function broadcastToAll(message: any) {
   });
 }
 
-// Get list of active and archived streams
+// Get list of active streams
 function getActiveStreams() {
   const streams: any[] = [];
   liveStreams.forEach((stream, streamId) => {
@@ -313,31 +229,10 @@ function getActiveStreams() {
       status: stream.status,
       viewers: stream.viewers.size,
       startTime: stream.startTime,
-      endTime: stream.endTime,
-      uptime: stream.endTime ? (stream.endTime - stream.startTime) : (Date.now() - stream.startTime),
-      qualities: stream.qualities
+      uptime: Date.now() - stream.startTime
     });
   });
   return streams;
-}
-
-// Get archived streams
-function getArchivedStreams() {
-  const archived: any[] = [];
-  liveStreams.forEach((stream, streamId) => {
-    if (stream.status === 'archived') {
-      archived.push({
-        id: streamId,
-        name: stream.name,
-        status: stream.status,
-        startTime: stream.startTime,
-        endTime: stream.endTime,
-        duration: stream.endTime ? (stream.endTime - stream.startTime) : 0,
-        qualities: stream.qualities
-      });
-    }
-  });
-  return archived;
 }
 
 // WebSocket connection handler
@@ -348,8 +243,7 @@ wss.on('connection', (ws) => {
   clients.set(clientId, {
     ws: ws,
     currentStream: null,
-    isStreamer: false,
-    selectedQuality: '720p'
+    isStreamer: false
   });
 
   // Send current active streams to new client
@@ -369,7 +263,6 @@ wss.on('connection', (ws) => {
         case 'start-live-stream':
           const streamId = uuidv4();
           const streamName = message.streamName || `Stream ${Date.now()}`;
-          const preserveAfterStop = message.preserveAfterStop !== false; // Default to true
           
           // Create new live stream
           liveStreams.set(streamId, {
@@ -377,16 +270,13 @@ wss.on('connection', (ws) => {
             name: streamName,
             ffmpegProcess: null,
             startTime: Date.now(),
-            endTime: null,
             viewers: new Set(),
             status: 'starting',
             inputPipe: null,
             hlsDir: '',
             sequenceNumber: 0,
             segments: [],
-            maxSegments: HLS_CONFIG.maxSegments,
-            qualities: [],
-            preserveAfterStop: preserveAfterStop
+            maxSegments: HLS_CONFIG.maxSegments
           });
           
           client.isStreamer = true;
@@ -398,8 +288,7 @@ wss.on('connection', (ws) => {
             ws.send(JSON.stringify({
               type: 'stream-started',
               streamId: streamId,
-              streamName: streamName,
-              preserveAfterStop: preserveAfterStop
+              streamName: streamName
             }));
             
             // Broadcast new stream to all clients
@@ -410,8 +299,7 @@ wss.on('connection', (ws) => {
                 name: streamName,
                 status: 'starting',
                 viewers: 0,
-                startTime: Date.now(),
-                qualities: HLS_CONFIG.qualities.map(q => q.name)
+                startTime: Date.now()
               }
             });
             
@@ -446,7 +334,6 @@ wss.on('connection', (ws) => {
             const stream = liveStreams.get(client.currentStream);
             if (stream) {
               stream.status = 'stopping';
-              stream.endTime = Date.now();
               
               // Close FFmpeg input
               if (stream.inputPipe) {
@@ -458,17 +345,25 @@ wss.on('connection', (ws) => {
                 stream.ffmpegProcess.kill('SIGTERM');
               }
               
+              // Clean up after a delay
+              setTimeout(() => {
+                liveStreams.delete(client.currentStream!);
+                
+                // Clean up HLS files
+                if (stream.hlsDir && fs.existsSync(stream.hlsDir)) {
+                  fs.rmSync(stream.hlsDir, { recursive: true, force: true });
+                }
+              }, 5000);
+              
               ws.send(JSON.stringify({
                 type: 'stream-stopped',
-                streamId: client.currentStream,
-                archived: stream.preserveAfterStop
+                streamId: client.currentStream
               }));
               
               // Broadcast stream ended
               broadcastToAll({
                 type: 'stream-ended',
-                streamId: client.currentStream,
-                archived: stream.preserveAfterStop
+                streamId: client.currentStream
               });
               
               client.currentStream = null;
@@ -479,7 +374,6 @@ wss.on('connection', (ws) => {
 
         case 'join-stream':
           const joinStreamId = message.streamId;
-          const quality = message.quality || '720p';
           const stream = liveStreams.get(joinStreamId);
           
           if (stream) {
@@ -494,23 +388,13 @@ wss.on('connection', (ws) => {
             // Add to new stream
             stream.viewers.add(clientId);
             client.currentStream = joinStreamId;
-            client.selectedQuality = quality;
-            
-            const hlsUrl = stream.status === 'archived' 
-              ? `/api/archived-hls/${joinStreamId}/${quality}.m3u8`
-              : `/api/live-hls/${joinStreamId}/${quality}.m3u8`;
             
             ws.send(JSON.stringify({
               type: 'joined-stream',
               streamId: joinStreamId,
               streamName: stream.name,
-              hlsUrl: hlsUrl,
-              masterHlsUrl: stream.status === 'archived' 
-                ? `/api/archived-hls/${joinStreamId}/master.m3u8`
-                : `/api/live-hls/${joinStreamId}/master.m3u8`,
-              status: stream.status,
-              quality: quality,
-              availableQualities: stream.qualities
+              hlsUrl: `/api/live-hls/${joinStreamId}/master.m3u8`,
+              status: stream.status
             }));
             
             // Update viewer count
@@ -520,34 +404,12 @@ wss.on('connection', (ws) => {
               viewers: stream.viewers.size
             });
             
-            console.log(`Client ${clientId} joined stream ${joinStreamId} with quality ${quality}`);
+            console.log(`Client ${clientId} joined stream ${joinStreamId}`);
           } else {
             ws.send(JSON.stringify({
               type: 'stream-not-found',
               streamId: joinStreamId
             }));
-          }
-          break;
-
-        case 'change-quality':
-          if (client.currentStream) {
-            const stream = liveStreams.get(client.currentStream);
-            const newQuality = message.quality || '720p';
-            
-            if (stream) {
-              client.selectedQuality = newQuality;
-              
-              const hlsUrl = stream.status === 'archived' 
-                ? `/api/archived-hls/${client.currentStream}/${newQuality}.m3u8`
-                : `/api/live-hls/${client.currentStream}/${newQuality}.m3u8`;
-              
-              ws.send(JSON.stringify({
-                type: 'quality-changed',
-                streamId: client.currentStream,
-                quality: newQuality,
-                hlsUrl: hlsUrl
-              }));
-            }
           }
           break;
 
@@ -580,13 +442,6 @@ wss.on('connection', (ws) => {
           }));
           break;
 
-        case 'get-archived-streams':
-          ws.send(JSON.stringify({
-            type: 'archived-streams',
-            streams: getArchivedStreams()
-          }));
-          break;
-
         default:
           console.log('Unknown message type:', message.type);
       }
@@ -609,7 +464,6 @@ wss.on('connection', (ws) => {
         const stream = liveStreams.get(client.currentStream);
         if (stream) {
           stream.status = 'stopping';
-          stream.endTime = Date.now();
           
           if (stream.inputPipe) {
             stream.inputPipe.end();
@@ -619,10 +473,17 @@ wss.on('connection', (ws) => {
             stream.ffmpegProcess.kill('SIGTERM');
           }
           
+          // Clean up
+          setTimeout(() => {
+            liveStreams.delete(client.currentStream!);
+            if (stream.hlsDir && fs.existsSync(stream.hlsDir)) {
+              fs.rmSync(stream.hlsDir, { recursive: true, force: true });
+            }
+          }, 5000);
+          
           broadcastToAll({
             type: 'stream-ended',
-            streamId: client.currentStream,
-            archived: stream.preserveAfterStop
+            streamId: client.currentStream
           });
         }
       }
@@ -666,32 +527,6 @@ app.get('/api/live-hls/:streamId/:filename', (req: any, res: any) => {
   }
   
   // Set appropriate headers
-  setHLSHeaders(res, filename);
-  res.sendFile(filePath);
-});
-
-// API endpoint to serve archived HLS streams
-app.get('/api/archived-hls/:streamId/:filename', (req: any, res: any) => {
-  const { streamId, filename } = req.params;
-  const stream = liveStreams.get(streamId);
-  
-  if (!stream || stream.status !== 'archived') {
-    return res.status(404).json({ error: 'Archived stream not found' });
-  }
-  
-  const filePath = path.join(archivedHlsDir, streamId, filename);
-  
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-  
-  // Set appropriate headers
-  setHLSHeaders(res, filename);
-  res.sendFile(filePath);
-});
-
-// Set HLS headers helper function
-function setHLSHeaders(res: any, filename: string) {
   if (filename.endsWith('.m3u8')) {
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -704,19 +539,14 @@ function setHLSHeaders(res: any, filename: string) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
   res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control');
-}
+  
+  res.sendFile(filePath);
+});
 
 // API endpoint to get active streams
 app.get('/api/live-streams', (req: Request, res: Response) => {
   res.json({
     streams: getActiveStreams()
-  });
-});
-
-// API endpoint to get archived streams
-app.get('/api/archived-streams', (req: Request, res: Response) => {
-  res.json({
-    streams: getArchivedStreams()
   });
 });
 
@@ -735,12 +565,8 @@ app.get('/api/live-streams/:streamId', (req: any, res: any) => {
     status: stream.status,
     viewers: stream.viewers.size,
     startTime: stream.startTime,
-    endTime: stream.endTime,
-    uptime: stream.endTime ? (stream.endTime - stream.startTime) : (Date.now() - stream.startTime),
-    hlsUrl: stream.status === 'archived' 
-      ? `/api/archived-hls/${streamId}/master.m3u8`
-      : `/api/live-hls/${streamId}/master.m3u8`,
-    qualities: stream.qualities
+    uptime: Date.now() - stream.startTime,
+    hlsUrl: `/api/live-hls/${streamId}/master.m3u8`
   });
 });
 
@@ -748,8 +574,7 @@ app.get('/api/live-streams/:streamId', (req: any, res: any) => {
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'healthy',
-    activeStreams: Array.from(liveStreams.values()).filter(s => s.status === 'live' || s.status === 'starting').length,
-    archivedStreams: Array.from(liveStreams.values()).filter(s => s.status === 'archived').length,
+    activeStreams: liveStreams.size,
     connectedClients: clients.size,
     timestamp: new Date().toISOString()
   });
@@ -777,8 +602,10 @@ process.on('SIGINT', () => {
     }
   });
   
-  // Note: We don't clean up HLS directories on shutdown to preserve archived content
-  console.log('Archived streams preserved');
+  // Clean up HLS directories
+  if (fs.existsSync(liveHlsDir)) {
+    fs.rmSync(liveHlsDir, { recursive: true, force: true });
+  }
   
   process.exit(0);
 });
@@ -788,8 +615,6 @@ server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`FFmpeg path: ${FFMPEG_PATH}`);
   console.log('Real-time HLS streaming server ready');
-  console.log(`Live streams directory: ${liveHlsDir}`);
-  console.log(`Archived streams directory: ${archivedHlsDir}`);
 });
 
 export default server;
