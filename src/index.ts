@@ -57,12 +57,12 @@ const formatsDir = path.join(__dirname, 'formats');
 
 // HLS configuration
 const HLS_CONFIG = {
-  segmentDuration: 6, // seconds
-  maxSegments: 10, // keep last 10 segments during live streaming
-  targetLatency: 18, // 3 segments * 6 seconds
+  segmentDuration: 2, // seconds
+  maxSegments: 3, // keep last 10 segments during live streaming
+  targetLatency: 6, // 3 segments * 6 seconds
   qualities: [
-    { name: '720p', width: 1280, height: 720, bitrate: 2500, audioBitrate: 128 },
-    { name: '480p', width: 854, height: 480, bitrate: 1000, audioBitrate: 96 },
+    // { name: '720p', width: 1280, height: 720, bitrate: 2500, audioBitrate: 128 },
+    // { name: '480p', width: 854, height: 480, bitrate: 1000, audioBitrate: 96 },
     { name: '360p', width: 640, height: 360, bitrate: 500, audioBitrate: 64 }
   ]
 };
@@ -101,10 +101,15 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
     const ffmpegArgs = [
       '-f', 'webm',
       '-i', 'pipe:0', // Read from stdin
-      
+
+      // Input buffer settings for lower latency
+    '-fflags', '+genpts+nobuffer',
+    '-flags', '+low_delay',
+    '-avoid_negative_ts', 'make_zero',
+    
       // Video encoding settings
       '-c:v', 'libx264',
-      '-preset', 'veryfast', // Fast encoding for real-time
+      '-preset', 'ultrafast', // Fast encoding for real-time
       '-tune', 'zerolatency', // Minimize latency
       '-profile:v', 'baseline',
       '-level', '3.0',
@@ -114,30 +119,30 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       '-c:a', 'aac',
       '-ac', '2',
       
-      // Create multiple quality outputs
-      '-map', '0:v', '-map', '0:a', // 720p
-      '-map', '0:v', '-map', '0:a', // 480p
+      // // Create multiple quality outputs
+      // '-map', '0:v', '-map', '0:a', // 720p
+      // '-map', '0:v', '-map', '0:a', // 480p
       '-map', '0:v', '-map', '0:a', // 360p
       
-      // 720p settings
-      '-s:v:0', '1280x720',
-      '-b:v:0', '2500k',
-      '-maxrate:v:0', '2750k',
-      '-bufsize:v:0', '5000k',
-      '-b:a:0', '128k',
+      // // 720p settings
+      // '-s:v:0', '1280x720',
+      // '-b:v:0', '2500k',
+      // '-maxrate:v:0', '2750k',
+      // '-bufsize:v:0', '5000k',
+      // '-b:a:0', '128k',
       
-      // 480p settings
-      '-s:v:1', '854x480',
-      '-b:v:1', '1000k',
-      '-maxrate:v:1', '1100k',
-      '-bufsize:v:1', '2000k',
-      '-b:a:1', '96k',
+      // // 480p settings
+      // '-s:v:1', '854x480',
+      // '-b:v:1', '1000k',
+      // '-maxrate:v:1', '1100k',
+      // '-bufsize:v:1', '2000k',
+      // '-b:a:1', '96k',
       
       // 360p settings
       '-s:v:2', '640x360',
       '-b:v:2', '500k',
       '-maxrate:v:2', '550k',
-      '-bufsize:v:2', '1000k',
+      '-bufsize:v:2', '64k',
       '-b:a:2', '64k',
       
       // HLS output settings
@@ -153,7 +158,8 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       
       // Master playlist
       '-master_pl_name', 'master.m3u8',
-      '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p v:2,a:2,name:360p',
+      '-var_stream_map', 'v:0,a:0,name:360p',
+      // '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p v:2,a:2,name:360p',
       
       path.join(hlsDir, '%v.m3u8')
     ];
@@ -170,27 +176,50 @@ function createLiveHLSStream(streamId: string, streamName: string): Promise<void
       console.log(`FFmpeg stdout: ${data}`);
     });
 
+    // ffmpegProcess.stderr.on('data', (data) => {
     ffmpegProcess.stderr.on('data', (data) => {
       const output = data.toString();
-      console.log(`FFmpeg stderr: ${output}`);
+      console.log('FFmpeg stderr:', output);
       
-      // Check if HLS is generating segments
-      if (output.includes('Opening') && output.includes('.ts')) {
+      // Look for first segment creation
+      if (output.includes('Opening') && output.includes('_segment_000.ts')) {
+        console.log('First segment created!');
         if (stream.status === 'starting') {
           stream.status = 'live';
-          console.log(`Stream ${streamId} is now live`);
+          console.log('Stream ${streamId} is now live');
           
-          // Notify all viewers
+          // Notify viewers immediately
           notifyViewers(streamId, {
             type: 'stream-live',
             streamId: streamId,
             streamName: streamName,
-            hlsUrl: `/api/live-hls/${streamId}/master.m3u8`,
+            hlsUrl: '/api/live-hls/${streamId}/master.m3u8',
             qualities: stream.qualities
           });
         }
       }
     });
+    
+    //   const output = data.toString();
+    //   console.log(`FFmpeg stderr: ${output}`);
+      
+    //   // Check if HLS is generating segments
+    //   if (output.includes('Opening') && output.includes('.ts')) {
+    //     if (stream.status === 'starting') {
+    //       stream.status = 'live';
+    //       console.log(`Stream ${streamId} is now live`);
+          
+    //       // Notify all viewers
+    //       notifyViewers(streamId, {
+    //         type: 'stream-live',
+    //         streamId: streamId,
+    //         streamName: streamName,
+    //         hlsUrl: `/api/live-hls/${streamId}/master.m3u8`,
+    //         qualities: stream.qualities
+    //       });
+    //     }
+    //   }
+    // });
 
     ffmpegProcess.on('close', (code) => {
       console.log(`FFmpeg process closed with code ${code}`);
@@ -267,12 +296,20 @@ function archiveStream(streamId: string) {
 
 // Create master playlist for archived content
 function createArchiveMasterPlaylist(streamId: string, archiveDir: string) {
+//   const masterPlaylistContent = `#EXTM3U
+// #EXT-X-VERSION:6
+// #EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720,NAME="720p"
+// 720p.m3u8
+// #EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480,NAME="480p"
+// 480p.m3u8
+// #EXT-X-STREAM-INF:BANDWIDTH=564000,RESOLUTION=640x360,NAME="360p"
+// 360p.m3u8
+// `;
+
+//   const masterPlaylistPath = path.join(archiveDir, 'master.m3u8');
+//   fs.writeFileSync(masterPlaylistPath, masterPlaylistContent);
   const masterPlaylistContent = `#EXTM3U
 #EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=2628000,RESOLUTION=1280x720,NAME="720p"
-720p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1096000,RESOLUTION=854x480,NAME="480p"
-480p.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=564000,RESOLUTION=640x360,NAME="360p"
 360p.m3u8
 `;

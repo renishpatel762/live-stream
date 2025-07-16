@@ -767,7 +767,7 @@
                     };
                     
                     // Start recording with shorter chunks for better real-time performance
-                    this.mediaRecorder.start(500); // 500ms chunks
+                    this.mediaRecorder.start(100); // 100ms chunks
                     this.updateDebugInfo('MediaRecorder started with 500ms chunks');
                     
                     // Tell server to start live stream
